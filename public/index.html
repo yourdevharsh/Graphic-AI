@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graphion AI - Video Generator</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 680px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            color: #0d6efd;
+        }
+
+        form {
+            background-color: #fff;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 600;
+            font-size: 1.1rem;
+            text-align: left;
+        }
+
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            height: 100px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border: 1px solid #ccd0d5;
+            border-radius: 6px;
+            font-size: 1rem;
+            resize: vertical;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px 15px;
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: background-color 0.2s ease-in-out;
+        }
+
+        button:hover {
+            background-color: #0b5ed7;
+        }
+
+        button:disabled {
+            background-color: #aaa;
+            cursor: not-allowed;
+        }
+
+        .output-container {
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            min-height: 100px;
+            box-sizing: border-box;
+            border: 1px solid #ddd;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        .output-container.error {
+            color: #d93025;
+            font-weight: 500;
+        }
+        
+        /* CHANGED: Renamed for clarity */
+        .output-container.loading-message {
+            color: #555;
+            font-weight: 500;
+        }
+
+        video {
+            max-width: 100%;
+            border-radius: 6px;
+            border: 1px solid #ddd;
+        }
+
+        .download-button {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 25px;
+            background-color: #198754; 
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 600;
+            transition: background-color 0.2s ease-in-out;
+        }
+
+        .download-button:hover {
+            background-color: #157347;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Graphion AI</h1>
+        <p>Turn your ideas into animated videos.</p>
+        <form id="promptForm">
+            <label for="userPrompt">Describe the animation you want to create:</label>
+            <textarea name="userPrompt" id="userPrompt" placeholder="e.g., A bouncing ball that changes color..."></textarea>
+            <button type="submit">Generate Video</button>
+        </form>
+
+        <h2>Result</h2>
+        <div id="outputArea" class="output-container">
+            Your generated video will appear here.
+        </div>
+    </div>
+
+    <script src="main.js"></script> 
+</body>
+
+</html>
