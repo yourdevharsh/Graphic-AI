@@ -17,6 +17,7 @@
     "dotenv": "^16.5.0",
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
-    "puppeteer": "^24.10.0"
+    "helmet": "^8.1.0",
+    "puppeteer": "^24.37.5"
   }
 }
