@@ -1,77 +1,58 @@
 document.addEventListener('DOMContentLoaded', () => {
-    const promptForm = document.querySelector('#promptForm');
-    const userPromptTextarea = document.querySelector('#userPrompt');
-    const submitButton = promptForm.querySelector('button[type="submit"]');
-    const outputArea = document.querySelector('#outputArea');
+    const elements = {
+        form: document.querySelector('#promptForm'),
+        input: document.querySelector('#userPrompt'),
+        btn: document.querySelector('#submitBtn'),
+        output: document.querySelector('#outputArea'),
+        placeholder: document.querySelector('#placeholderText'),
+        loading: document.querySelector('#loadingState'),
+        videoContainer: document.querySelector('#videoContainer'),
+        video: document.querySelector('#mainVideo'),
+        download: document.querySelector('#downloadBtn')
+    };
 
-    promptForm.addEventListener('submit', (event) => {
-        event.preventDefault();
+    elements.form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const prompt = elements.input.value.trim();
 
-        const prompt = userPromptTextarea.value.trim();
+        if (!prompt) return alert("Please enter a prompt.");
 
-        if (prompt) {
-            outputArea.textContent = 'Generating video, this may take a moment...';
-            outputArea.className = 'output-container loading-message';
-            submitButton.disabled = true;
-            outputArea.innerHTML = '<p>Generating video, this may take a moment...</p>';
+        // UI State: Loading
+        elements.btn.disabled = true;
+        elements.placeholder.classList.add('hidden');
+        elements.videoContainer.classList.add('hidden');
+        elements.loading.classList.remove('hidden');
 
+        try {
+            const response = await fetch('/generate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ prompt })
+            });
 
-            fetch('/generate', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        prompt
-                    })
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        return response.json().then(errData => {
-                            throw new Error(errData.error || `Server error: ${response.status}`);
-                        }).catch(() => {
-                            throw new Error(`Server error: ${response.status} ${response.statusText}`);
-                        });
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (data && data.videoUrl) {
-                        outputArea.innerHTML = '';
-                        outputArea.className = 'output-container';
+            const data = await response.json();
 
-                        const videoPlayer = document.createElement('video');
-                        videoPlayer.src = data.videoUrl + '?t=' + new Date().getTime();
-                        videoPlayer.controls = true;
-                        videoPlayer.autoplay = true;
-                        videoPlayer.muted = true;
-                        videoPlayer.setAttribute('playsinline', '');
+            if (!response.ok) throw new Error(data.error || "Server error");
 
-                        const downloadLink = document.createElement('a');
-                        downloadLink.href = data.videoUrl;
-                        downloadLink.textContent = 'Download Video (MP4)';
-                        downloadLink.className = 'download-button';
+            // Success: Show Video
+            elements.video.src = data.videoUrl;
+            elements.download.onclick = () => {
+                const a = document.createElement('a');
+                a.href = data.videoUrl;
+                a.download = 'graphion-animation.mp4';
+                a.click();
+            };
 
-                        downloadLink.setAttribute('download', 'generated-by-graphion-ai.mp4');
+            elements.loading.classList.add('hidden');
+            elements.videoContainer.classList.remove('hidden');
 
-                        outputArea.appendChild(videoPlayer);
-                        outputArea.appendChild(downloadLink);
-
-                    } else {
-                        throw new Error('Invalid response from server. Expected a video URL.');
-                    }
-                })
-                .catch(error => {
-                    console.error('Fetch Error:', error);
-                    outputArea.textContent = `Error: ${error.message}`;
-                    outputArea.className = 'output-container error';
-                })
-                .finally(() => {
-                    submitButton.disabled = false;
-                });
-        } else {
-            outputArea.textContent = 'Please enter a prompt to generate a video.';
-            outputArea.className = 'output-container error';
+        } catch (err) {
+            console.error(err);
+            elements.placeholder.innerHTML = `<span class="error">Error: ${err.message}</span>`;
+            elements.placeholder.classList.remove('hidden');
+            elements.loading.classList.add('hidden');
+        } finally {
+            elements.btn.disabled = false;
         }
     });
 });
