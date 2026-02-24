@@ -1,298 +1,137 @@
-const puppeteer = require('puppeteer');
+const express = require("express");
+const puppeteer = require("puppeteer");
+const { setTimeout } = require("node:timers/promises");
+const fs = require("fs");
+const path = require("path");
+const { exec } = require("child_process");
+const crypto = require("crypto");
+const helmet = require("helmet");
+require("dotenv").config();
 const {
-    setTimeout
-} = require('node:timers/promises');
-const fs = require('fs');
-const path = require('path');
-const {
-    exec
-} = require('child_process');
-const express = require('express');
-require('dotenv').config();
-
-
-const {
-    GoogleGenerativeAI,
-    HarmCategory,
-    HarmBlockThreshold
+  GoogleGenerativeAI,
+  HarmCategory,
+  HarmBlockThreshold,
 } = require("@google/generative-ai");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
+// --- Config & AI Setup ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-if (!GEMINI_API_KEY) {
-    console.error("FATAL ERROR: GEMINI_API_KEY is not set in the environment variables.");
-    process.exit(1);
-}
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash"
-});
-
-const generationConfig = {
-    temperature: 0.3,
-    topK: 1,
-    topP: 1,
-    maxOutputTokens: 8192,
-};
-
-const safetySettings = [{
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_NONE
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_NONE
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE
-    },
-];
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
 // --- Middleware ---
-app.use(express.urlencoded({
-    extended: true
-}));
+app.use(helmet({ contentSecurityPolicy: false })); // CSP disabled for CDN script loading
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, "public")));
 
+// Ensure temp and public directories exist
+const TEMP_BASE_DIR = path.join(__dirname, "temp");
+const PUBLIC_VIDEO_DIR = path.join(__dirname, "public", "videos");
+[TEMP_BASE_DIR, PUBLIC_VIDEO_DIR].forEach((dir) => {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+});
 
-// A helper function to promisify exec for cleaner async/await usage.
+/**
+ * Executes shell commands (FFmpeg)
+ */
 function executeCommand(command) {
-    return new Promise((resolve, reject) => {
-        exec(command, (error, stdout, stderr) => {
-            if (error) {
-                console.error(`exec error: ${error.message}`);
-                // ADDED: Include stderr in the rejection for better debugging
-                reject(new Error(`FFmpeg command failed:\n${stderr}`));
-                return;
-            }
-            if (stderr) {
-                console.warn(`Command stderr:\n${stderr}`);
-            }
-            console.log(`Command stdout:\n${stdout}`);
-            resolve(stdout);
-        });
+  return new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) reject(new Error(`FFmpeg Error: ${stderr}`));
+      else resolve(stdout);
     });
+  });
 }
 
-// Video generation logic
-async function generateVideoFromHtml(htmlContent) {
-    const outputDir = 'screenshots_for_video';
-    const generatedHtmlFile = 'generated.html';
-    const framesPerSecond = 30;
-    const captureDurationInSeconds = 5;
+/**
+ * Core Logic: Generates video from HTML
+ */
+async function generateVideo(htmlContent, sessionId) {
+  const workDir = path.join(TEMP_BASE_DIR, sessionId);
+  const videoFileName = `video_${sessionId}.mp4`;
+  const videoPath = path.join(PUBLIC_VIDEO_DIR, videoFileName);
 
-    const videoFileName = 'output_video.mp4';
-    const publicVideoPath = path.join(__dirname, 'public', videoFileName);
-    const videoResolution = {
-        width: 1920,
-        height: 1080
-    };
-    const screenshotType = 'webp';
-    const screenshotQuality = 90;
+  const settings = {
+    fps: 30,
+    duration: 5,
+    width: 1280, // 720p for better performance/speed ratio
+    height: 720,
+  };
 
-    // --- Cleanup and Setup ---
-    if (fs.existsSync(outputDir)) {
-        fs.rmSync(outputDir, {
-            recursive: true,
-            force: true
-        });
-    }
-    fs.mkdirSync(outputDir, {
-        recursive: true
+  fs.mkdirSync(workDir, { recursive: true });
+  const htmlPath = path.join(workDir, "index.html");
+  fs.writeFileSync(htmlPath, htmlContent);
+
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      headless: "new",
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
     });
+    const page = await browser.newPage();
+    await page.setViewport({ width: settings.width, height: settings.height });
+    await page.goto(`file://${htmlPath}`, { waitUntil: "networkidle0" });
 
-    // Cleanup old video file if it exists
-    if (fs.existsSync(publicVideoPath)) {
-        fs.unlinkSync(publicVideoPath);
+    const totalFrames = settings.fps * settings.duration;
+    console.log(`[${sessionId}] Capturing ${totalFrames} frames...`);
+
+    for (let i = 0; i < totalFrames; i++) {
+      const framePath = path.join(
+        workDir,
+        `frame_${String(i).padStart(5, "0")}.webp`,
+      );
+      await page.screenshot({ path: framePath, type: "webp", quality: 80 });
+      // Small delay to allow JS animations to progress
+      await setTimeout(1000 / settings.fps);
     }
 
-    const generatedHtmlPath = path.join(__dirname, generatedHtmlFile);
-    fs.writeFileSync(generatedHtmlPath, htmlContent, 'utf8');
+    const inputPattern = path.join(workDir, "frame_%05d.webp");
+    const ffmpegCmd = `ffmpeg -y -framerate ${settings.fps} -i "${inputPattern}" -c:v libx264 -pix_fmt yuv420p -crf 23 "${videoPath}"`;
 
-    let browser;
-    try {
-        // --- Puppeteer Launch and Page Setup ---
-        console.log('Launching Puppeteer...');
-        browser = await puppeteer.launch({
-            headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox', `--window-size=${videoResolution.width},${videoResolution.height}`]
-        });
-        const page = await browser.newPage();
-        await page.setViewport({
-            width: videoResolution.width,
-            height: videoResolution.height,
-            deviceScaleFactor: 1,
-        });
-        const pageUrl = `file://${generatedHtmlPath}`;
-        console.log(`Navigating to: ${pageUrl}`);
-        await page.goto(pageUrl, {
-            waitUntil: 'networkidle0'
-        });
-
-        // --- Screenshot Capture Loop ---
-        const totalFramesToCapture = framesPerSecond * captureDurationInSeconds;
-        const intervalMs = 1000 / framesPerSecond;
-        console.log(`Starting to capture ${totalFramesToCapture} frames...`);
-        for (let i = 0; i < totalFramesToCapture; i++) {
-            const startTime = Date.now();
-            const filename = path.join(outputDir, `frame_${String(i).padStart(5, '0')}.${screenshotType}`);
-            await page.screenshot({
-                path: filename,
-                type: screenshotType,
-                quality: screenshotQuality,
-                fullPage: false,
-            });
-            const elapsedTime = Date.now() - startTime;
-            const delay = intervalMs - elapsedTime;
-            if (delay > 0) await setTimeout(delay);
-        }
-        console.log(`Finished capturing ${totalFramesToCapture} frames.`);
-
-        // --- FFmpeg Video Compilation ---
-        const inputPattern = path.join(outputDir, `frame_%05d.${screenshotType}`);
-        // Output path for ffmpeg command is the full public path
-        const ffmpegCommand = `ffmpeg -y -framerate ${framesPerSecond} -i "${inputPattern}" -c:v libx264 -crf 18 -pix_fmt yuv420p "${publicVideoPath}"`;
-        console.log(`Executing FFmpeg command: ${ffmpegCommand}`);
-        await executeCommand(ffmpegCommand);
-        console.log(`Video created successfully: ${publicVideoPath}`);
-
-        // Return the URL
-        return `/${videoFileName}`;
-
-    } catch (e) {
-        console.error('\nAn error occurred during the video generation process:', e);
-        throw e;
-    } finally {
-        if (browser) {
-            await browser.close();
-            console.log('Puppeteer browser closed.');
-        }
-        // Cleanup temporary files after we are done.
-        if (fs.existsSync(outputDir)) {
-            fs.rmSync(outputDir, {
-                recursive: true,
-                force: true
-            });
-        }
-        if (fs.existsSync(generatedHtmlPath)) {
-            fs.unlinkSync(generatedHtmlPath);
-        }
-    }
+    await executeCommand(ffmpegCmd);
+    return `/videos/${videoFileName}`;
+  } finally {
+    if (browser) await browser.close();
+    // Cleanup temp frames
+    fs.rmSync(workDir, { recursive: true, force: true });
+  }
 }
 
+app.post("/generate", async (req, res) => {
+  const { prompt } = req.body;
+  const sessionId = crypto.randomUUID();
 
-app.post('/generate', async (req, res) => {
-    const userPrompt = req.body.prompt;
-    console.log(`Received prompt: "${userPrompt}"`);
+  if (!prompt || prompt.length < 5) {
+    return res.status(400).json({ error: "Prompt is too short." });
+  }
 
-    if (!userPrompt || typeof userPrompt !== 'string' || userPrompt.trim() === '') {
-        return res.status(400).json({
-            error: 'Prompt is required and must be a non-empty string.'
-        });
-    }
+  try {
+    const systemInstruction = `You are a creative developer. Create a single-file HTML/CSS/JS animation using GSAP. 
+        Return ONLY raw HTML. No markdown, no backticks, no explanations. 
+        Include: <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>`;
 
-    try {
-        // Prompt
-        const systemInstruction = `
-        You are a world-class creative developer. You specialize in crafting visually stunning, single-file animated web pages using only HTML, CSS, and JavaScript, with the GSAP library as your primary tool. Your goal is to translate a user's request into a single, polished, and performant HTML file.
-        ### Core Directives
-        1.  **Fulfill the User's Request:** Generate code that precisely implements the user's description of an animation. The animation must be visually captivating and start automatically when the page loads. If the user's request is vague, take creative liberty to produce a professional and impressive result.
-        2.  **Single-File Structure:**
-            * The entire output **MUST** be a single HTML file.
-            * All CSS must be placed within a <style> tag inside the <head>.
-            * All JavaScript must be placed within a <script> tag just before the closing </body> tag.
-        3.  **GSAP is Mandatory:**
-            * Always include the latest GSAP library via its official CDN script tag. For example: <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>.
-            * Use GSAP Timelines (gsap.timeline()) to choreograph and sequence multiple animations.
-            * Use the official GSAP documentation as your guide for best practices: https://gsap.com/docs/v3/
-        4.  **Professional Quality Standards:**
-            * **Aesthetics:** Create a visually cohesive and professional design. Pay close attention to the color palette, typography, spacing, and composition. Use appropriate GSAP easing functions (e.g., "power2.inOut", "expo.out", "elastic") to make animations feel fluid and natural.
-            * **Responsive Design:** Use modern CSS techniques like Flexbox, Grid, and relative units (vh, vw, rem,%) to ensure the animation looks great on all screen sizes, from mobile to desktop.
-            * **Performance:** Write clean, efficient code optimized for smooth, 60fps animations. Animate transforms (opacity, transform) instead of layout properties (width, height, margin) whenever possible.
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      systemInstruction,
+      generationConfig: { temperature: 0.4, maxOutputTokens: 8000 },
+    });
 
-        ### Pre-Output Internal Checklist
+    let html = result.response.text();
+    // Sanitize: AI sometimes wraps code in ```html blocks despite instructions
+    html = html.replace(/```html|```/g, "").trim();
 
-        Before generating the final response, silently perform this three-step review:
-
-            1.  **Requirement Check:** Does the code perfectly match all aspects of the user's request?
-            2.  **Technical Check:** Is the HTML, CSS, and JS syntax valid? Is the single-file structure correct? Is GSAP included and used properly according to its documentation?
-            3.  **Aesthetic & Performance Check:** Is the animation smooth, responsive, and visually compelling? Could the timing, easing, or overall design be improved?
-
-        ### Output Format Rules
-
-            * **Your entire response must be ONLY the raw HTML code.**
-            * Do **NOT** include any explanations, introductions, comments, or conversational text.
-            * Do **NOT** use markdown formatting like \`\`\`html.
-            * Your response **MUST** begin with <!DOCTYPE html> and end with </html>.
-        `;
-
-        const result = await model.generateContent({
-            contents: [{
-                role: "user",
-                parts: [{
-                    text: userPrompt
-                }]
-            }],
-            systemInstruction: {
-                role: "system",
-                parts: [{
-                    text: systemInstruction
-                }]
-            },
-            generationConfig,
-            safetySettings,
-        });
-
-        if (!result.response || !result.response.candidates || result.response.candidates.length === 0) {
-            let blockReason = "Content generation failed or was blocked by safety settings.";
-            if (result.response?.promptFeedback?.blockReason) {
-                blockReason = `Content blocked due to: ${result.response.promptFeedback.blockReason}`;
-            }
-            console.error("Gemini API Error:", blockReason, result.response);
-            return res.status(500).json({
-                error: blockReason
-            });
-        }
-
-        const aiResponseText = result.response.text();
-        console.log("Gemini Response successfully received.");
-
-        const videoUrl = await generateVideoFromHtml(aiResponseText);
-
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-
-        res.json({
-            videoUrl: videoUrl
-        });
-
-    } catch (error) {
-        console.error("Error in /generate endpoint:", error);
-        res.status(500).json({
-            error: `An error occurred: ${error.message}`
-        });
-    }
+    const videoUrl = await generateVideo(html, sessionId);
+    res.json({ videoUrl });
+  } catch (error) {
+    console.error("Process Error:", error);
+    res
+      .status(500)
+      .json({
+        error: "Failed to generate video. Please try a different prompt.",
+      });
+  }
 });
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
-    console.log('Serving static files from:', path.join(__dirname, 'public'));
-    if (!GEMINI_API_KEY) {
-        console.warn("Warning: GEMINI_API_KEY is not set. The /generate endpoint will fail.");
-    } else {
-        console.log("Gemini API Key loaded successfully.");
-    }
-});
+app.listen(PORT, () => console.log(`Server live at http://localhost:${PORT}`));
